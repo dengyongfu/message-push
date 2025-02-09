@@ -10,17 +10,152 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
-const graphAPIURL = "https://api.studio.thegraph.com/query/100116/contract_3e2f0/version/latest"
-const storageFile = "storage.json"
+const (
+	graphAPIURL = "https://api.studio.thegraph.com/query/100116/contract_3e2f0/version/latest"
+	configFile  = "app_config.json" // 合并后的配置文件
+)
 
-// 定义多个 Bark API 地址
-var barkAPIURLs = []string{
-	//"https://api.day.app/kVXVy7PwcQvo2pWTs4QPTQ/",
-	"https://api.day.app/iuizSoSLLvtMTZhhmuWetY/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/",
-	//"https://api.day.app/UjHSr5Mn2aUpjCee6b2Nkg/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/",
+// 配置文件结构
+type Config struct {
+	BarkAPIURLs     []string `json:"barkAPIURLs"`     // Bark API 地址列表
+	LastBlockNumber string   `json:"lastBlockNumber"` // 上次处理的区块号
+	CurrentTxHashes []string `json:"currentTxHashes"` // 当前已处理的交易哈希列表
+}
+
+var (
+	configData  Config       // 全局配置数据
+	configMutex sync.RWMutex // 配置读写锁
+)
+
+func init() {
+	// 初始化时加载配置
+	loadConfig()
+	// 启动文件监控
+	go watchConfig()
+}
+
+// 加载配置文件
+func loadConfig() {
+	file, err := os.Open(configFile)
+	if err != nil {
+		slog.Error("Error opening config file, using default config", "error", err)
+		// 如果配置文件不存在，使用默认配置
+		configData = Config{
+			BarkAPIURLs: []string{
+				"https://api.day.app/iuizSoSLLvtMTZhhmuWetY/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/",
+			},
+			LastBlockNumber: "21612681",
+			CurrentTxHashes: []string{"0xccce6256453e517062bb4cfb74494a0bdb2fefa793f75d3d31cf041d76bf99fd"},
+		}
+		saveConfig()
+		return
+	}
+	defer file.Close()
+
+	decoder := json.NewDecoder(file)
+	var newConfig Config
+	err = decoder.Decode(&newConfig)
+	if err != nil {
+		slog.Error("Error decoding config data", "error", err)
+		return
+	}
+
+	// 更新全局配置
+	configMutex.Lock()
+	configData = newConfig
+	configMutex.Unlock()
+}
+
+// 保存配置文件
+func saveConfig() {
+	file, err := os.Create(configFile)
+	if err != nil {
+		slog.Error("Error creating config file", "error", err)
+		return
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ") // 格式化输出
+	err = encoder.Encode(&configData)
+	if err != nil {
+		slog.Error("Error encoding config data", "error", err)
+	}
+}
+
+// 监控配置文件变化
+func watchConfig() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		slog.Error("Failed to create watcher", "error", err)
+		return
+	}
+	defer watcher.Close()
+
+	err = watcher.Add(configFile)
+	if err != nil {
+		slog.Error("Failed to add config file to watcher", "error", err)
+		return
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				slog.Info("Config file modified, reloading...")
+				loadConfig() // 配置文件修改时重新加载
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Error("Watcher error", "error", err)
+		}
+	}
+}
+
+// 获取 Bark API 地址列表
+func getBarkAPIURLs() []string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return configData.BarkAPIURLs
+}
+
+// 获取上次处理的区块号
+func getLastBlockNumber() string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return configData.LastBlockNumber
+}
+
+// 获取当前已处理的交易哈希列表
+func getCurrentTxHashes() []string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return configData.CurrentTxHashes
+}
+
+// 更新上次处理的区块号
+func setLastBlockNumber(blockNumber string) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	configData.LastBlockNumber = blockNumber
+}
+
+// 更新当前已处理的交易哈希列表
+func setCurrentTxHashes(txHashes []string) {
+	configMutex.Lock()
+	defer configMutex.Unlock()
+	configData.CurrentTxHashes = txHashes
 }
 
 // GraphQL 查询模板
@@ -38,10 +173,11 @@ const queryTemplate = `
     blockNumber
     blockTimestamp
     transactionHash
-	btcPrice
+    btcPrice
   }
 }`
 
+// Swap 数据结构
 type Swap struct {
 	ID              string `json:"id"`
 	Sender          string `json:"sender"`
@@ -57,139 +193,48 @@ type Swap struct {
 	BtcPrice        string `json:"btcPrice"`
 }
 
+// GraphResponse 数据结构
 type GraphResponse struct {
 	Data struct {
 		Swaps []Swap `json:"swaps"`
 	} `json:"data"`
 }
 
-type Storage struct {
-	LastBlockNumber string   `json:"lastBlockNumber"`
-	CurrentTxHashes []string `json:"currentTxHashes"`
-}
-
-var storageData Storage
-
-func init() {
-	loadStorage()
-}
-
-func loadStorage() {
-	file, err := os.Open(storageFile)
-	if err != nil {
-		// 初始化默认存储数据
-		slog.Error("Error opening storage file", "error", err)
-		storageData = Storage{LastBlockNumber: "21612681", CurrentTxHashes: []string{"0xccce6256453e517062bb4cfb74494a0bdb2fefa793f75d3d31cf041d76bf99fd"}}
-		saveStorage()
-		return
-	}
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&storageData)
-	if err != nil {
-		slog.Error("Error decoding storage data", "error", err)
-		storageData = Storage{LastBlockNumber: "0", CurrentTxHashes: []string{}}
-	}
-}
-
-func saveStorage() {
-	file, err := os.Create(storageFile)
-	if err != nil {
-		slog.Error("Error creating storage file", "error", err)
-		return
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	err = encoder.Encode(&storageData)
-	if err != nil {
-		slog.Error("Error encoding storage data", "error", err)
-	}
-}
-
-// GraphTask 执行任务
-func GraphTask() error {
-	swaps, err := fetchSwaps()
-	if err != nil {
-		slog.Error("Error fetching swaps", "error", err)
-		time.Sleep(3 * time.Second)
-		return err
-	}
-	if len(swaps) == 0 {
-		slog.Info("No new swaps found")
-		return nil
-	}
-
-	slog.Info("GraphTask", "swaps", swaps)
-
-	// 处理新数据
-	var newTxHashes []string
-	for _, swap := range swaps {
-		if !contains(storageData.CurrentTxHashes, swap.TransactionHash) {
-			err = sendNotification(swap)
-			if err != nil {
-				slog.Error("Error sending notification", "error", err)
-			} else {
-				newTxHashes = append(newTxHashes, swap.TransactionHash)
-			}
-		}
-	}
-
-	// 更新存储
-	if len(swaps) > 0 {
-		storageData.LastBlockNumber = swaps[0].BlockNumber
-		storageData.CurrentTxHashes = newTxHashes
-		saveStorage()
-	}
-	return nil
-}
-
+// 获取最新的 Swap 数据
 func fetchSwaps() ([]Swap, error) {
 	pageSize := 50
-	startBlock := parseLastBlockNumber()
+	startBlock, _ := strconv.Atoi(getLastBlockNumber())
 	var allSwaps []Swap
 
 	for {
-		// 格式化 GraphQL 查询字符串
 		query := fmt.Sprintf(queryTemplate, pageSize, startBlock)
-
-		// 创建请求体
-		requestBody, err := json.Marshal(map[string]string{
-			"query": query,
-		})
+		requestBody, err := json.Marshal(map[string]string{"query": query})
 		if err != nil {
 			slog.Error("Failed to create request body", "error", err)
 			return nil, err
 		}
 
-		// 创建 HTTP 请求
 		req, err := http.NewRequest("POST", graphAPIURL, bytes.NewBuffer(requestBody))
 		if err != nil {
 			slog.Error("Failed to create HTTP request", "error", err)
 			return nil, err
 		}
-
-		// 设置请求头
 		req.Header.Set("Content-Type", "application/json")
 
-		// 执行请求
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
-			slog.Error("Failed to execute request", "resp", resp, "error", err)
+			slog.Error("Failed to execute request", "error", err)
 			return nil, err
 		}
 		defer resp.Body.Close()
 
-		// 读取响应体
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			slog.Error("Failed to read response body", "error", err)
 			return nil, err
 		}
 
-		// 解析响应
 		var graphResponse GraphResponse
 		err = json.Unmarshal(body, &graphResponse)
 		if err != nil {
@@ -197,24 +242,14 @@ func fetchSwaps() ([]Swap, error) {
 			return nil, err
 		}
 
-		slog.Info("fetchSwaps", "graphResponse", graphResponse)
-		// 如果没有新数据，退出循环
 		if len(graphResponse.Data.Swaps) == 0 {
 			break
 		}
 
-		// 追加当前查询的数据
 		allSwaps = append(allSwaps, graphResponse.Data.Swaps...)
-
-		// 更新起始 BlockNumber 为当前结果中的最大 BlockNumber
-		newStartBlock, err := strconv.Atoi(graphResponse.Data.Swaps[len(graphResponse.Data.Swaps)-1].BlockNumber)
-		if err != nil {
-			slog.Error("Failed to parse BlockNumber", "error", err)
-			return nil, err
-		}
+		newStartBlock, _ := strconv.Atoi(graphResponse.Data.Swaps[len(graphResponse.Data.Swaps)-1].BlockNumber)
 		startBlock = newStartBlock
 
-		// 如果查询到的数据少于分页大小，说明没有更多数据了
 		if len(graphResponse.Data.Swaps) < pageSize {
 			break
 		}
@@ -222,35 +257,19 @@ func fetchSwaps() ([]Swap, error) {
 	return allSwaps, nil
 }
 
-func parseLastBlockNumber() int {
-	blockNumber, err := strconv.Atoi(storageData.LastBlockNumber)
-	if err != nil {
-		slog.Error("Failed to parse stored BlockNumber, defaulting to 0", "error", err)
-		return 21584546
-	}
-	return blockNumber
-}
-
+// 发送通知
 func sendNotification(swap Swap) error {
-	timestamp, err := strconv.ParseInt(swap.BlockTimestamp, 10, 64)
-	if err != nil {
-		timestamp = time.Now().Unix()
-		slog.Error("Failed to parse blockTimestamp", "error", err)
-	}
+	timestamp, _ := strconv.ParseInt(swap.BlockTimestamp, 10, 64)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-
 	readableTime := time.Unix(timestamp, 0).In(loc).Format("2006-01-02 15:04:05")
-	slog.Info("New swap detected", "blockNumber",
-		swap.BlockNumber, "transactionHash", swap.TransactionHash, "blockTimes", readableTime, "btcPrice", swap.BtcPrice)
+	slog.Info("New swap detected", "blockNumber", swap.BlockNumber, "transactionHash", swap.TransactionHash, "blockTimes", readableTime, "btcPrice", swap.BtcPrice)
 
-	slog.Info("sendNotification", "amount0:", swap.Amount0, "amount1:", swap.Amount1)
 	message := FormatSwap(&swap)
 	if message == "" {
 		return nil
 	}
 
-	// 遍历所有 Bark API 地址进行推送
-	for _, baseURL := range barkAPIURLs {
+	for _, baseURL := range getBarkAPIURLs() {
 		baseURL = baseURL + message + "?call=1"
 		resp, err := http.Get(baseURL)
 		if err != nil {
@@ -267,41 +286,27 @@ func sendNotification(swap Swap) error {
 	return nil
 }
 
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-// FormatSwap formats the Swap event into the desired string format
+// 格式化 Swap 数据
 func FormatSwap(swap *Swap) string {
-	// Convert amounts from strings directly to big.Float
 	amount0Float, _ := new(big.Float).SetString(swap.Amount0)
 	amount1Float, _ := new(big.Float).SetString(swap.Amount1)
 
-	// Initialize variables for amountIn, amountOut, tokenIn, and tokenOut
 	var amountIn, amountOut *big.Float
 	var tokenIn, tokenOut string
 
-	// Determine the direction of the swap based on the sign of amount0
-	if amount0Float.Sign() < 0 { // Selling token0 (e.g., WBTC) to buy token1 (e.g., UNIBTC)
-		amountIn = amount1Float                      // amount0 is negative, so it's the amount we are selling
-		amountOut = new(big.Float).Neg(amount0Float) // amount1 is the amount we are buying
+	if amount0Float.Sign() < 0 {
+		amountIn = amount1Float
+		amountOut = new(big.Float).Neg(amount0Float)
 		tokenIn = "WBTC"
 		tokenOut = "UNIBTC"
-	} else { // Selling token1 (e.g., UNIBTC) to buy token0 (e.g., WBTC)
-		amountIn = amount0Float                      // amount0 is positive, so it's the amount we are selling
-		amountOut = new(big.Float).Neg(amount1Float) // amount1 is the amount we are buying
+	} else {
+		amountIn = amount0Float
+		amountOut = new(big.Float).Neg(amount1Float)
 		tokenIn = "UNIBTC"
 		tokenOut = "WBTC"
 	}
 
-	// Calculate volume in USD using the WBTC price
-	defaultPrice := 100000.0
-	wbtcPrice := big.NewFloat(defaultPrice)
+	wbtcPrice := big.NewFloat(100000.0)
 	if swap.BtcPrice != "" {
 		if parsedPrice, _, err := new(big.Float).Parse(swap.BtcPrice, 10); err == nil {
 			wbtcPrice = parsedPrice
@@ -311,21 +316,61 @@ func FormatSwap(swap *Swap) string {
 	}
 
 	vol := new(big.Float).Mul(amountIn, wbtcPrice)
-
-	// Format the output, ensuring that amounts are rounded to 5 decimal places
 	amountInStr := new(big.Float).Quo(amountIn, big.NewFloat(1e8)).Text('f', 5)
 	amountOutStr := new(big.Float).Quo(amountOut, big.NewFloat(1e8)).Text('f', 5)
-
 	volStr := new(big.Float).Quo(vol, big.NewFloat(1e8)).Text('f', 2)
 
 	timestamp, err := strconv.ParseInt(swap.BlockTimestamp, 10, 64)
 	if err != nil {
 		return ""
 	}
+
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	readableTime := time.Unix(timestamp, 0).In(loc).Format("2006-01-02 15:04:05")
 
-	// Ensure the output is accurate and formatted
-	return fmt.Sprintf("%s  %s %s -> %s %s Vol: $%s",
-		readableTime, amountInStr, tokenIn, amountOutStr, tokenOut, volStr)
+	return fmt.Sprintf("%s  %s %s -> %s %s Vol: $%s", readableTime,
+		amountInStr, tokenIn, amountOutStr, tokenOut, volStr)
+}
+
+// 主任务
+func GraphTask() error {
+	swaps, err := fetchSwaps()
+	if err != nil {
+		slog.Error("Error fetching swaps", "error", err)
+		time.Sleep(3 * time.Second)
+		return err
+	}
+	if len(swaps) == 0 {
+		slog.Info("No new swaps found")
+		return nil
+	}
+
+	var newTxHashes []string
+	for _, swap := range swaps {
+		if !contains(getCurrentTxHashes(), swap.TransactionHash) {
+			err = sendNotification(swap)
+			if err != nil {
+				slog.Error("Error sending notification", "error", err)
+			} else {
+				newTxHashes = append(newTxHashes, swap.TransactionHash)
+			}
+		}
+	}
+
+	if len(swaps) > 0 {
+		setLastBlockNumber(swaps[0].BlockNumber)
+		setCurrentTxHashes(newTxHashes)
+		saveConfig()
+	}
+	return nil
+}
+
+// 判断切片是否包含某个元素
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
