@@ -1,0 +1,60 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main  # 监听 main 分支的推送事件
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2. 设置 Go 环境
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20'  # 指定 Go 版本
+
+      # 3. 构建代码
+      - name: Build
+        run: go build -o message-push
+
+      # 4. 将构建结果打包
+      - name: Package artifacts
+        run: |
+          mkdir -p dist
+          cp message-push dist/
+          cp app_config.json dist/
+          tar -czvf dist/message-push.tar.gz -C dist .
+
+      # 5. 将构建结果上传到 GitHub Artifacts（可选）
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: message-push
+          path: dist/message-push.tar.gz
+
+      # 6. 部署到私有服务器
+      - name: Deploy to server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # 服务器 SSH 私钥
+          SERVER_IP: ${{ secrets.SERVER_IP }}             # 服务器 IP 地址
+          SERVER_USER: ${{ secrets.SERVER_USER }}         # 服务器用户名
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}         # 服务器部署路径
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          scp -o StrictHostKeyChecking=no dist/message-push.tar.gz $SERVER_USER@$SERVER_IP:$DEPLOY_PATH
+          ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP "
+            cd $DEPLOY_PATH &&
+            tar -xzvf message-push.tar.gz &&
+            chmod +x message-push &&
+            pkill -f message-push || true &&
+            nohup ./message-push > output.log 2>&1 &
+          "
