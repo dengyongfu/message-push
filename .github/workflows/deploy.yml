@@ -12,17 +12,19 @@ jobs:
     steps:
       # 1. 拉取代码
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4.0.0
 
       # 2. 设置 Go 环境
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5.0.0
         with:
           go-version: '1.20'  # 指定 Go 版本
 
-      # 3. 构建代码
-      - name: Build
-        run: go build -o message-push
+      # 3. 构建项目
+      - name: Build project
+        run: |
+          go mod tidy
+          go build -o message-push
 
       # 4. 将构建结果打包
       - name: Package artifacts
