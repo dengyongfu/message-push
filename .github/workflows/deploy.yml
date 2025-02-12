@@ -36,8 +36,8 @@ jobs:
       - name: Deploy to server
         uses: appleboy/scp-action@master
         with:
-          host: ${{ secrets.SERVER_IP }}               # 服务器 IP 地址
-          username: ${{ secrets.SERVER_USER }}         # 服务器用户名
+          host: ${{ secrets.SSH_HOST }}               # 服务器 IP 地址
+          username: ${{ secrets.SSH_SERVERNAME }}         # 服务器用户名
           key: ${{ secrets.SSH_PRIVATE_KEY }}          # 服务器 SSH 私钥
           source: "dist/message-push.tar.gz"
           target: ${{ secrets.DEPLOY_PATH }}           # 服务器部署路径
@@ -46,8 +46,8 @@ jobs:
       - name: Deploy to server
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}  # 服务器 SSH 私钥
-          SERVER_IP: ${{ secrets.SERVER_IP }}             # 服务器 IP 地址
-          SERVER_USER: ${{ secrets.SERVER_USER }}         # 服务器用户名
+          SERVER_IP: ${{ secrets.SSH_HOST }}             # 服务器 IP 地址
+          SERVER_USER: ${{ secrets.SSH_SERVERNAME }}         # 服务器用户名
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}         # 服务器部署路径
         run: |
           mkdir -p ~/.ssh
