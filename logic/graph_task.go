@@ -26,6 +26,7 @@ type Config struct {
 	BarkAPIURLs     []string `json:"barkAPIURLs"`     // Bark API 地址列表
 	LastBlockNumber string   `json:"lastBlockNumber"` // 上次处理的区块号
 	CurrentTxHashes []string `json:"currentTxHashes"` // 当前已处理的交易哈希列表
+	LimitPrice      int      `json:"limitPrice"`      // 限制 BTC 价格
 }
 
 var (
@@ -52,6 +53,7 @@ func loadConfig() {
 			},
 			LastBlockNumber: "21612681",
 			CurrentTxHashes: []string{"0xccce6256453e517062bb4cfb74494a0bdb2fefa793f75d3d31cf041d76bf99fd"},
+			LimitPrice:      1000,
 		}
 		saveConfig()
 		return
@@ -128,6 +130,12 @@ func getBarkAPIURLs() []string {
 	configMutex.RLock()
 	defer configMutex.RUnlock()
 	return configData.BarkAPIURLs
+}
+
+func getLimitPrice() int {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	return configData.LimitPrice
 }
 
 // 获取上次处理的区块号
@@ -264,13 +272,23 @@ func sendNotification(swap Swap) error {
 	readableTime := time.Unix(timestamp, 0).In(loc).Format("2006-01-02 15:04:05")
 	slog.Info("New swap detected", "blockNumber", swap.BlockNumber, "transactionHash", swap.TransactionHash, "blockTimes", readableTime, "btcPrice", swap.BtcPrice)
 
-	message := FormatSwap(&swap)
+	message, vol := FormatSwap(&swap)
 	if message == "" {
+		return nil
+	}
+	volBtc := new(big.Float).Quo(vol, big.NewFloat(1e8))
+	volBtcStr := volBtc.Text('f', 2)
+	limitPriceFloat := big.NewFloat(float64(getLimitPrice()))
+	if volBtc.Cmp(limitPriceFloat) > 0 {
+		slog.Info("Volume > limitPrice, sending notification", "volume", volBtcStr)
+	} else {
+		slog.Info("Volume < limitPrice, skipping notification", "volume", volBtcStr)
 		return nil
 	}
 
 	for _, baseURL := range getBarkAPIURLs() {
 		baseURL = baseURL + message + "?call=1"
+		slog.Info("Notification sent test", "url", baseURL)
 		resp, err := http.Get(baseURL)
 		if err != nil {
 			slog.Error("Failed to send notification to device", "url", baseURL, "error", err)
@@ -286,8 +304,8 @@ func sendNotification(swap Swap) error {
 	return nil
 }
 
-// 格式化 Swap 数据
-func FormatSwap(swap *Swap) string {
+// FormatSwap 格式化 Swap 数据
+func FormatSwap(swap *Swap) (string, *big.Float) {
 	amount0Float, _ := new(big.Float).SetString(swap.Amount0)
 	amount1Float, _ := new(big.Float).SetString(swap.Amount1)
 
@@ -322,17 +340,17 @@ func FormatSwap(swap *Swap) string {
 
 	timestamp, err := strconv.ParseInt(swap.BlockTimestamp, 10, 64)
 	if err != nil {
-		return ""
+		return "", vol
 	}
 
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	readableTime := time.Unix(timestamp, 0).In(loc).Format("2006-01-02 15:04:05")
 
 	return fmt.Sprintf("%s  %s %s -> %s %s Vol: $%s", readableTime,
-		amountInStr, tokenIn, amountOutStr, tokenOut, volStr)
+		amountInStr, tokenIn, amountOutStr, tokenOut, volStr), vol
 }
 
-// 主任务
+// GraphTask 主任务
 func GraphTask() error {
 	swaps, err := fetchSwaps()
 	if err != nil {

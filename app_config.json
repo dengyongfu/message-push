@@ -1,9 +1,11 @@
 {
   "barkAPIURLs": [
-    "https://api.day.app/iuizSoSLLvtMTZhhmuWetY/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/"
+    "https://api.day.app/iuizSoSLLvtMTZhhmuWetY/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/",
+    "https://api.day.app/UjHSr5Mn2aUpjCee6b2Nkg/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/"
   ],
-  "lastBlockNumber": "21807419",
+  "lastBlockNumber": "21820034",
   "currentTxHashes": [
-    "0xc567dc1a7a88243543810ee868140c2e1922300668a447d42d5e4f69d2706715"
-  ]
+    "0xe1e181ae94b051aa56a92cf428c90356b086d1a72ebf80711d55d10f3023e6ed"
+  ],
+  "limitPrice": 1000
 }

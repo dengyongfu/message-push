@@ -27,4 +27,4 @@ go.work.sum
 .idea
 .vscode
 .log
-/rpc/logs/*.log
+/logs/*.log
