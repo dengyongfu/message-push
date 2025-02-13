@@ -25,6 +25,15 @@ jobs:
         run: |
           go mod tidy
           go build -o message-push
+      # 3.1. 配置 SSH 连接
+      - name: Fix SSH key permissions
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+      - name: Test SSH connectivity
+        run: |
+          nc -zv ${{ secrets.SSH_HOST }} 22
 
       # 4. 将构建结果打包
       - name: Package artifacts
@@ -40,6 +49,7 @@ jobs:
           username: ${{ secrets.SSH_USERNAME }}       # 服务器用户名
           key: ${{ secrets.SSH_PRIVATE_KEY }}         # 服务器 SSH 私钥
           source: "dist/message-push.tar.gz"
+          port: '22'
           target: ${{ secrets.DEPLOY_PATH }}          # 服务器部署路径
 
       # 6. 在服务器上解压并重启服务（使用 nohup）
