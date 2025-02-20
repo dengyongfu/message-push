@@ -287,7 +287,7 @@ func sendNotification(swap Swap) error {
 	}
 
 	for _, baseURL := range getBarkAPIURLs() {
-		baseURL = baseURL + message + "?call=1"
+		baseURL = baseURL + message + "?call=1&level=critical"
 		slog.Info("Notification sent test", "url", baseURL)
 		resp, err := http.Get(baseURL)
 		if err != nil {
