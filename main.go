@@ -15,6 +15,7 @@ import (
 func main() {
 	// 初始化日志配置
 	setupLogger()
+
 	logic.StartTasks()
 	select {}
 }
@@ -33,7 +34,7 @@ func setupLogger() {
 	// 配置日志切割
 	log.SetOutput(&lumberjack.Logger{
 		Filename:   logFileName, // 日志文件路径
-		MaxSize:    1,           // 单个日志文件的最大大小（MB）
+		MaxSize:    5,           // 单个日志文件的最大大小（MB）
 		MaxBackups: 20,          // 最多保留的旧日志文件数量
 		MaxAge:     2,           // 日志文件保留的天数
 		Compress:   true,        // 是否压缩旧日志

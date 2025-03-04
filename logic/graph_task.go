@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -17,8 +18,9 @@ import (
 )
 
 const (
-	graphAPIURL = "https://api.studio.thegraph.com/query/100116/contract_3e2f0/version/latest"
-	configFile  = "app_config.json" // 合并后的配置文件
+	graphAPIURL        = "https://api.studio.thegraph.com/query/100116/contract_3e2f0/version/latest"
+	configFile         = "app_config.json" // 合并后的配置文件
+	swapAlertConfigUrl = "https://yapi.s.capital/mock/66/unibtc/swap/alert"
 )
 
 // 配置文件结构
@@ -51,8 +53,8 @@ func loadConfig() {
 			BarkAPIURLs: []string{
 				"https://api.day.app/iuizSoSLLvtMTZhhmuWetY/%E4%BA%A4%E6%98%93%E6%8F%90%E9%86%92/",
 			},
-			LastBlockNumber: "21612681",
-			CurrentTxHashes: []string{"0xccce6256453e517062bb4cfb74494a0bdb2fefa793f75d3d31cf041d76bf99fd"},
+			LastBlockNumber: "21965957",
+			CurrentTxHashes: []string{"0xae616ac89b00b9e78468908ac9c592ba93ba52774e299333ad291a1ccb599e34"},
 			LimitPrice:      1000,
 		}
 		saveConfig()
@@ -266,7 +268,7 @@ func fetchSwaps() ([]Swap, error) {
 }
 
 // 发送通知
-func sendNotification(swap Swap) error {
+func sendNotification(swap Swap, sAlertConfig *SwapAlertConfig) error {
 	timestamp, _ := strconv.ParseInt(swap.BlockTimestamp, 10, 64)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	readableTime := time.Unix(timestamp, 0).In(loc).Format("2006-01-02 15:04:05")
@@ -278,18 +280,24 @@ func sendNotification(swap Swap) error {
 	}
 	volBtc := new(big.Float).Quo(vol, big.NewFloat(1e8))
 	volBtcStr := volBtc.Text('f', 2)
-	limitPriceFloat := big.NewFloat(float64(getLimitPrice()))
+	limitPriceFloat := big.NewFloat(float64(sAlertConfig.VolumeThreshold))
 	if volBtc.Cmp(limitPriceFloat) > 0 {
 		slog.Info("Volume > limitPrice, sending notification", "volume", volBtcStr)
 	} else {
 		slog.Info("Volume < limitPrice, skipping notification", "volume", volBtcStr)
 		return nil
 	}
+	title := "交易提醒"
+
+	// 对 title 和 message 进行 URL 编码
+	encodedTitle := url.QueryEscape(title)
+	encodedMessage := url.QueryEscape(message)
 
 	for _, baseURL := range getBarkAPIURLs() {
-		baseURL = baseURL + message + "?call=1&level=critical"
-		slog.Info("Notification sent test", "url", baseURL)
-		resp, err := http.Get(baseURL)
+		// 拼接 URL
+		fullURL := fmt.Sprintf("%s/%s/%s?call=1&level=critical", baseURL, encodedTitle, encodedMessage)
+		slog.Info("GraphTask Notification sent test", "url", fullURL)
+		resp, err := http.Get(fullURL)
 		if err != nil {
 			slog.Error("Failed to send notification to device", "url", baseURL, "error", err)
 			continue
@@ -363,14 +371,18 @@ func GraphTask() error {
 		return nil
 	}
 
+	// 3.获取配置
+
 	var newTxHashes []string
-	for _, swap := range swaps {
-		if !contains(getCurrentTxHashes(), swap.TransactionHash) {
-			err = sendNotification(swap)
-			if err != nil {
-				slog.Error("Error sending notification", "error", err)
-			} else {
-				newTxHashes = append(newTxHashes, swap.TransactionHash)
+	if !IsSwapAlertConfigEmpty(swapAlertConfig) && swapAlertConfig.Open {
+		for _, swap := range swaps {
+			if !contains(getCurrentTxHashes(), swap.TransactionHash) {
+				err = sendNotification(swap, &swapAlertConfig)
+				if err != nil {
+					slog.Error("Error sending notification", "error", err)
+				} else {
+					newTxHashes = append(newTxHashes, swap.TransactionHash)
+				}
 			}
 		}
 	}
@@ -381,6 +393,11 @@ func GraphTask() error {
 		saveConfig()
 	}
 	return nil
+}
+
+func IsSwapAlertConfigEmpty(config SwapAlertConfig) bool {
+	fmt.Printf("SwapAlertConfig: %v\n", config)
+	return !config.Open && config.VolumeThreshold == 0
 }
 
 // 判断切片是否包含某个元素
