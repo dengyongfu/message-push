@@ -54,6 +54,8 @@ go build -o message-push main.go
 - 上传至服务器后设置权限
 ```shell
 chmod +x message-push
+chmod +x app_config.json
+
 ```
 ## 启动服务
 ```shell
