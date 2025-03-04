@@ -20,7 +20,7 @@
 该文件用于配置项目的相关参数，具体配置项说明如下：
 
 - `barkAPIURLs`: 用于发送通知的API URL列表。
-- `lastBlockNumber`: 上次处理的区块号。
+- `lastBlockNumber`: 上次处理的区块号,程序重启后会从该区块高度处理。
 - `currentTxHashes`: 当前处理的交易哈希列表。
 
 示例配置：
