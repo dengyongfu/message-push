@@ -67,11 +67,11 @@ func FetchSwapAlertConfig() error {
 func FetchAlertConfig() error {
 	err := FetchUnstakeAlertConfig()
 	if err != nil {
-		return err
+		log.Fatalf("FetchUnstakeAlertConfig 获取和解析数据失败: %v", err)
 	}
 	err = FetchSwapAlertConfig()
 	if err != nil {
-		return err
+		log.Fatalf("FetchSwapAlertConfig 获取和解析数据失败: %v", err)
 	}
 	return nil
 }
